@@ -141,6 +141,16 @@ private:
     }
 };
 
+inline std::unique_ptr<cql_server::response> make_unique_response(int16_t stream, cql_binary_opcode opcode, const tracing::trace_state_ptr& tr_state_ptr) {
+    if (tr_state_ptr.has_opentelemetry()) {
+        std::map<sstring, bytes> custom_payload{{"opentelemetry", tr_state_ptr.get_opentelemetry_ptr()->serialize()}};
+        return std::make_unique<cql_server::response>(stream, opcode, tr_state_ptr, custom_payload);
+    }
+    else {
+        return std::make_unique<cql_server::response>(stream, opcode, tr_state_ptr);
+    }
+}
+
 template<>
 class response::placeholder<int32_t> {
     int8_t* _pointer;
