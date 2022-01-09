@@ -43,6 +43,7 @@
 #include <deque>
 #include <unordered_set>
 #include <seastar/util/lazy.hh>
+#include <utility>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
 #include "tracing/tracing.hh"
@@ -510,6 +511,24 @@ class opentelemetry_state final {
 private:
     lw_shared_ptr<trace_state> _state_ptr;
     bool const _opentelemetry_tracing{false};
+    inet_address_vector_replica_set _replicas;
+
+    void serialize_replicas(bytes& serialized) const noexcept {
+        const auto size = htonl(_replicas.size());
+        const auto *size_ptr = reinterpret_cast<const int8_t*>(&size);
+        serialized += bytes{size_ptr, sizeof(size)};
+
+        for (const auto &replica : _replicas) {
+            const auto addr = replica.addr();
+
+            const auto addr_size = static_cast<uint8_t>(addr.size());
+            const auto *addr_size_ptr = reinterpret_cast<const int8_t*>(&addr_size);
+            serialized += bytes{addr_size_ptr, sizeof(addr_size)};
+
+            const auto *addr_data = static_cast<const int8_t*>(addr.data());
+            serialized += bytes{addr_data, addr_size};
+        }
+    }
 
 public:
     opentelemetry_state() = default;
@@ -520,9 +539,24 @@ public:
             : _state_ptr(nullptr), _opentelemetry_tracing(opentelemetry_tracing)
     {}
 
+    /**
+     * @return serialized opentelemetry state.
+     */
     bytes serialize() const noexcept {
         bytes serialized{};
+
+        serialize_replicas(serialized);
+
         return serialized;
+    }
+
+    /**
+     * Store list of contacted replicas.
+     *
+     * @param replicas list of contacted replicas
+     */
+    void set_replicas(const inet_address_vector_replica_set& replicas) noexcept {
+        _replicas = replicas;
     }
 
     /**
