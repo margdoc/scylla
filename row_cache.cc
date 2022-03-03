@@ -750,6 +750,7 @@ row_cache::do_make_reader(schema_ptr s,
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
+                increment_cache_counter(trace_state, 1);
                 return e.read(*this, make_context());
             } else if (i->continuous()) {
                 return make_empty_flat_reader(std::move(s), std::move(permit));
