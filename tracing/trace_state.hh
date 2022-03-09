@@ -518,6 +518,7 @@ private:
     cache_counter_t _cache_counter{0};
 
     void serialize_replicas(bytes& serialized) const;
+    void serialize_cache_counter(bytes& serialized) const;
 
 public:
     opentelemetry_state() = default;
@@ -535,6 +536,7 @@ public:
         bytes serialized{};
 
         serialize_replicas(serialized);
+        serialize_cache_counter(serialized);
 
         return serialized;
     }
