@@ -3563,6 +3563,9 @@ protected:
                 auto&& [result, hit_rate, cache_counter] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 tracing::increment_cache_counter(_trace_state, cache_counter);
+                if (_trace_state.has_opentelemetry()) {
+                    printf("Got %d partition hits (sum=%d).\n", cache_counter, tracing::get_cache_counter(_trace_state));
+                }
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, tracing::trace_state_ptr::cache_counter_t>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()), cache_counter));
             });
         }

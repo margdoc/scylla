@@ -69,6 +69,8 @@ public:
             std::map<sstring, bytes> custom_payload{{"opentelemetry", tr_state_ptr.get_opentelemetry_ptr()->serialize()}};
             write_bytes_map(custom_payload);
             set_frame_flag(cql_frame_flags::custom_payload);
+
+            printf("Partition hits = %d.\n", tracing::get_cache_counter(tr_state_ptr));
         }
     }
 
