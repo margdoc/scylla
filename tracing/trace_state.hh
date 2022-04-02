@@ -507,27 +507,76 @@ private:
 };
 
 
-class opentelemetry_state final {
+class opentelemetry_state_data final {
 public:
     using cache_counter_t = int32_t;
 
-private:
-    lw_shared_ptr<trace_state> _state_ptr;
-    bool const _opentelemetry_tracing{false};
     inet_address_vector_replica_set _replicas;
     // Number of read partitions that were found in cache.
     cache_counter_t _cache_counter{0};
 
     void serialize_replicas(bytes& serialized) const;
     void serialize_cache_counter(bytes& serialized) const;
+};
+
+
+struct opentelemetry_state_data_sharded_deleter {
+    void operator()(seastar::sharded<opentelemetry_state_data> *sharded) {
+        sharded->stop().wait();
+        delete sharded;
+    }
+};
+
+
+class opentelemetry_state final {
+
+private:
+    lw_shared_ptr<trace_state> _state_ptr;
+    std::shared_ptr<seastar::sharded<opentelemetry_state_data>> _data;
+
+    class reducer {
+    private:
+        opentelemetry_state_data _data;
+
+    public:
+        void operator()(const opentelemetry_state_data& to_reduce) {
+            _data._replicas.insert(_data._replicas.end(),
+                                   to_reduce._replicas.begin(),
+                                   to_reduce._replicas.end());
+            _data._cache_counter += to_reduce._cache_counter;
+        }
+
+        opentelemetry_state_data get() const {
+            return _data;
+        }
+    };
 
 public:
     opentelemetry_state() = default;
-    opentelemetry_state(lw_shared_ptr<trace_state> state_ptr, bool opentelemetry_tracing = false)
-            : _state_ptr(std::move(state_ptr)), _opentelemetry_tracing(opentelemetry_tracing)
+    opentelemetry_state(lw_shared_ptr<trace_state> state_ptr)
+            : _state_ptr(std::move(state_ptr))
     {}
-    opentelemetry_state(std::nullptr_t, bool opentelemetry_tracing = false)
-            : _state_ptr(nullptr), _opentelemetry_tracing(opentelemetry_tracing)
+    opentelemetry_state(std::nullptr_t)
+            : _state_ptr(nullptr)
+    {}
+    template<typename TraceState>
+    opentelemetry_state(TraceState state_ptr, std::nullptr_t)
+            : _state_ptr(std::move(state_ptr)), _data(nullptr)
+    {}
+    template<typename TraceState>
+    opentelemetry_state(TraceState state_ptr, std::shared_ptr<seastar::sharded<opentelemetry_state_data>> data)
+            : _state_ptr(std::move(state_ptr)), _data(std::move(data))
+    {
+        _data->start_single().wait();
+    }
+    template<typename TraceState>
+    opentelemetry_state(TraceState state_ptr, bool opentelemetry_tracing = false)
+            : opentelemetry_state(std::move(state_ptr),
+                                  opentelemetry_tracing
+                                  ? std::shared_ptr<seastar::sharded<opentelemetry_state_data>>(
+                                          new seastar::sharded<opentelemetry_state_data>{},
+                                          opentelemetry_state_data_sharded_deleter{})
+                                  : nullptr)
     {}
 
     /**
@@ -536,8 +585,10 @@ public:
     bytes serialize() const noexcept {
         bytes serialized{};
 
-        serialize_replicas(serialized);
-        serialize_cache_counter(serialized);
+        opentelemetry_state_data data = _data->map_reduce(reducer{}, std::identity{}).get();
+
+        data.serialize_replicas(serialized);
+        data.serialize_cache_counter(serialized);
 
         return serialized;
     }
@@ -548,7 +599,7 @@ public:
      * @param replicas list of contacted replicas
      */
     void set_replicas(const inet_address_vector_replica_set& replicas) {
-        _replicas = replicas;
+        _data->local()._replicas = replicas;
     }
 
     /**
@@ -556,22 +607,22 @@ public:
      *
      * @param count number of partitions
      */
-    void modify_cache_counter(cache_counter_t count) {
-        _cache_counter += count;
+    void modify_cache_counter(opentelemetry_state_data::cache_counter_t count) {
+        _data->local()._cache_counter += count;
     }
 
     /**
      * @return number of partitions that were found in cache
      */
-    cache_counter_t get_cache_counter() const {
-        return _cache_counter;
+    opentelemetry_state_data::cache_counter_t get_cache_counter() const {
+        return _data->local()._cache_counter;
     }
 
     /**
      * @return True if OpenTelemetry trace state is stored.
      */
     bool has_opentelemetry() const noexcept {
-        return _opentelemetry_tracing;
+        return __builtin_expect(bool(_data), false);
     };
 
     /**
@@ -593,6 +644,10 @@ public:
      */
     trace_state& get_tracing() const noexcept {
         return *_state_ptr;
+    }
+
+    std::shared_ptr<seastar::sharded<opentelemetry_state_data>> get_data() const {
+        return _data;
     }
 };
 
@@ -620,7 +675,7 @@ public:
         : _state_ptr(nullptr)
     {}
 
-    using cache_counter_t = opentelemetry_state::cache_counter_t;
+    using cache_counter_t = opentelemetry_state_data::cache_counter_t;
 
     /**
      * @return True if classic trace state is stored.
@@ -872,7 +927,7 @@ inline std::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     if (state.has_opentelemetry()) {
         trace_state_props_set props{};
         props.set(trace_state_props::opentelemetry);
-        return trace_info{props};
+        return trace_info{props, state.get_opentelemetry().get_data()};
     }
 
     return std::nullopt;
