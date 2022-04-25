@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cstdio>
 #include <seastar/core/future.hh>
 #include <seastar/core/print.hh>
 
@@ -91,6 +92,7 @@ future<size_t>
 traced_file_impl::read_dma(uint64_t pos, void* buf, size_t len, const io_priority_class& pc) {
     tracing::trace(_trace_state, "{} scheduling DMA read of {} bytes at position {}", _trace_prefix, len, pos);
     tracing::modify_dma_counter(_trace_state, 1);
+    printf("dupa\n");
     return get_file_impl(_f)->read_dma(pos, buf, len, pc).then_wrapped([this, pos, len] (future<size_t> f) {
         try {
             auto ret = f.get0();
@@ -108,6 +110,7 @@ future<size_t>
 traced_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) {
     tracing::trace(_trace_state, "{} scheduling DMA read at position {}", _trace_prefix, pos);
     tracing::modify_dma_counter(_trace_state, 1);
+    printf("dupa\n");
     return get_file_impl(_f)->read_dma(pos, std::move(iov), pc).then_wrapped([this, pos] (future<size_t> f) {
         try {
             auto ret = f.get0();
@@ -235,6 +238,7 @@ future<temporary_buffer<uint8_t>>
 traced_file_impl::dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) {
     tracing::trace(_trace_state, "{} scheduling bulk DMA read of size {} at offset {}", _trace_prefix, range_size, offset);
     tracing::modify_dma_counter(_trace_state, 1);
+    printf("dupa\n");
     return get_file_impl(_f)->dma_read_bulk(offset, range_size, pc).then_wrapped([this, offset, range_size] (future<temporary_buffer<uint8_t>> f) {
         try {
             auto ret = f.get0();
