@@ -159,6 +159,12 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
+    auto make_traced_query_state() {
+        if (_db.local().has_keyspace(ks_name)) {
+            _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
+        }
+        return ::make_shared<service::query_state>(_core_local.local().client_state, make_lw_shared<tracing::opentelemetry_state>(nullptr, true), empty_service_permit());
+    }
     static void adjust_rlimit() {
         // Tests should use 1024 file descriptors, but don't punish them
         // with weird behavior if they do.
@@ -202,6 +208,13 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
+        auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
+        return local_qp().execute_direct(text, *qs, *qo).finally([qs, qo] {});
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql_traced(sstring_view text) override {
+        testlog.trace("{}(\"{}\")", __FUNCTION__, text);
+        auto qs = make_traced_query_state();
         auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
         return local_qp().execute_direct(text, *qs, *qo).finally([qs, qo] {});
     }

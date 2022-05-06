@@ -109,6 +109,8 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) = 0;
 
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql_traced(sstring_view text) = 0;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
             sstring_view text, std::unique_ptr<cql3::query_options> qo) = 0;
 

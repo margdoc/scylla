@@ -42,6 +42,10 @@
 #include "alternator/tags_extension.hh"
 #include "gms/gossiper.hh"
 
+#include "tracing/tracing.hh"
+#include "tracing/trace_state.hh"
+#include "tracing/tracing_backend_registry.hh"
+
 static const sstring table_name = "cf";
 
 static bytes make_key(uint64_t sequence) {
@@ -52,7 +56,7 @@ static bytes make_key(uint64_t sequence) {
 };
 
 static void execute_update_for_key(cql_test_env& env, const bytes& key) {
-    env.execute_cql(fmt::format("UPDATE cf SET "
+    env.execute_cql_traced(fmt::format("UPDATE cf SET "
         "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
         "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
         "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
@@ -62,7 +66,7 @@ static void execute_update_for_key(cql_test_env& env, const bytes& key) {
 };
 
 static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
-    env.execute_cql(fmt::format("UPDATE cf SET "
+    env.execute_cql_traced(fmt::format("UPDATE cf SET "
         "\"C0\" = \"C0\" + 1,"
         "\"C1\" = \"C1\" + 2,"
         "\"C2\" = \"C2\" + 3,"
@@ -486,6 +490,28 @@ void write_json_result(std::string result_file, const test_config& cfg, perf_res
     out << results;
 }
 
+future<> do_with_tracing_env_thread(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in = {}) {
+    return do_with_cql_env_thread([func](auto &env) {
+        // supervisor::notify("creating tracing");
+        tracing::backend_registry tracing_backend_registry;
+        tracing::register_tracing_keyspace_backend(tracing_backend_registry);
+        tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
+
+        // supervisor::notify("starting tracing");
+        tracing::tracing::start_tracing(env.qp()).get();
+
+        return do_with(std::move(tracing_backend_registry), [func, &env](auto &reg) {
+            return func(env).finally([]() {
+                return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
+                    return local_tracing.shutdown();
+                }).finally([]() {
+                    return tracing::tracing::tracing_instance().stop();
+                });
+            });
+        });
+    }, std::move(cfg_in));
+}
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -523,7 +549,7 @@ int main(int argc, char** argv) {
             db_cfg->enable_cache(enable_cache);
 
             cql_test_config cfg(db_cfg);
-          return do_with_cql_env_thread([&app] (auto&& env) {
+          return do_with_tracing_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
             cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
