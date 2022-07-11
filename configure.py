@@ -1138,6 +1138,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/replica_exception.idl.hh',
         'idl/per_partition_rate_limit_info.idl.hh',
         'idl/position_in_partition.idl.hh',
+        'idl/group0_tables_lang.idl.hh',
         ]
 
 rusts = [
