@@ -136,6 +136,7 @@ public:
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto GROUP0_HISTORY = "group0_history";
     static constexpr auto DISCOVERY = "discovery";
+    static constexpr auto GROUP0_KV_STORE = "group0_kv_store";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -194,7 +195,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG, DISCOVERY };
+    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_CONFIG, DISCOVERY, GROUP0_KV_STORE };
 
     static bool is_extra_durable(const sstring& name);
 
@@ -219,6 +220,7 @@ public:
     static schema_ptr repair_history();
     static schema_ptr group0_history();
     static schema_ptr discovery();
+    static schema_ptr group0_kv_store();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
