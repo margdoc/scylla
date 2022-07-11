@@ -2687,7 +2687,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_config(), group0_history(), discovery()});
 
-        if (cfg.check_experimental(db::experimental_features_t::GROUP0_TABLES)) {
+        if (cfg.check_experimental(db::experimental_features_t::feature::GROUP0_TABLES)) {
             r.insert(r.end(), {group0_kv_store()});
         }
     }
