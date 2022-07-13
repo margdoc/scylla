@@ -12,6 +12,8 @@
 
 #include <seastar/core/metrics.hh>
 
+#include "seastar/core/smp.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
@@ -20,8 +22,10 @@
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "hashers.hh"
+#include "raft/group0_tables/lang.hh"
 
 namespace cql3 {
 
@@ -55,7 +59,7 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client* group0_client)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _forwarder(forwarder)
@@ -64,6 +68,7 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
         , _mm(mm)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
+        , _group0_client(group0_client)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
@@ -518,6 +523,20 @@ query_processor::execute_prepared_without_checking_exception_message(
     });
 }
 
+static
+future<::shared_ptr<result_message>>
+dispatch_statement_execution(query_processor& qp, const cql_statement& statement, service::query_state& query_state, const query_options& options) {
+    if (qp.has_group0_tables() && raft::group0_tables::is_group0_table_statement(statement)) {
+        if (this_shard_id() != 0) {
+            return make_ready_future<::shared_ptr<result_message>>(qp.bounce_to_shard(0, {}));
+        }
+
+        return raft::group0_tables::execute(qp.get_group0_client(), statement);
+    } else [[likely]] {
+        return statement.execute_without_checking_exception_message(qp, query_state, options);
+    }
+}
+
 future<::shared_ptr<result_message>>
 query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     auto& client_state = query_state.get_client_state();
@@ -526,7 +545,7 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(*this, client_state);
 
-    auto fut = statement->execute_without_checking_exception_message(*this, query_state, options);
+    auto fut = dispatch_statement_execution(*this, *statement, query_state, options);
 
     return fut.then([statement] (auto msg) {
         if (msg) {

@@ -86,6 +86,10 @@ public:
      */
     virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
 
+    const std::optional<expr::expression>& get_expression() const {
+        return _e;
+    }
+
     /**
      * A parsed raw UPDATE operation.
      *

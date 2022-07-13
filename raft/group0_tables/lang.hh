@@ -11,6 +11,13 @@
 #include <string>
 #include <variant>
 
+#include "cql3/cql_statement.hh"
+#include "seastar/core/future.hh"
+#include "transport/messages/result_message_base.hh"
+
+namespace service {
+    class raft_group0_client;
+}
 
 namespace raft::group0_tables {
 
@@ -30,5 +37,12 @@ struct update_query {
 struct query {
     std::variant<select_query, update_query> q;
 };
+
+// Function checks if statement should be executed on group0 table.
+// For now it returns true if and only if target table is system.group0_kv_store and
+// doesn't selects the entire table (it's used for debug).
+bool is_group0_table_statement(const cql3::cql_statement& statement);
+
+future<::shared_ptr<cql_transport::messages::result_message>> execute(service::raft_group0_client& group0_client, const cql3::cql_statement& statement);
 
 } // namespace raft::group0_tables

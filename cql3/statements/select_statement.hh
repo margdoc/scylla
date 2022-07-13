@@ -133,6 +133,8 @@ public:
 
     const ::shared_ptr<const restrictions::statement_restrictions> get_restrictions() const;
 
+    const ::shared_ptr<selection::selection> get_selection() const;
+
     bool has_group_by() const { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
