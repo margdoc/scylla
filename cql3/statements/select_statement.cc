@@ -843,6 +843,10 @@ const ::shared_ptr<const restrictions::statement_restrictions> select_statement:
     return _restrictions;
 }
 
+const ::shared_ptr<selection::selection> select_statement::get_selection() const {
+    return _selection;
+}
+
 primary_key_select_statement::primary_key_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                            lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,

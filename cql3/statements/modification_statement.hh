@@ -256,6 +256,15 @@ public:
     future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
+
+    const std::vector<::shared_ptr<operation>>& get_column_operations() const {
+        return _column_operations;
+    }
+
+    const std::vector<lw_shared_ptr<column_condition>>& get_regular_conditions() const {
+        return _regular_conditions;
+    }
+
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been

@@ -529,6 +529,7 @@ set(scylla_sources
     query_ranges_to_vnodes.cc
     query-result-set.cc
     raft/fsm.cc
+    raft/group0_tables/lang.cc
     raft/log.cc
     raft/raft.cc
     raft/server.cc
