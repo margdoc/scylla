@@ -8,11 +8,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <optional>
 #include <seastar/core/coroutine.hh>
 #include "raft_group0_client.hh"
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
+#include "seastar/core/shared_ptr.hh"
 #include "serialization_visitors.hh"
 #include "serializer.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -22,8 +24,13 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
+#include "idl/group0_tables_lang.dist.hh"
+#include "idl/group0_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
+#include "service/raft/group0_state_machine.hh"
+#include "utils/UUID.hh"
+#include "transport/messages/result_message.hh"
 
 
 namespace service {
@@ -145,6 +152,17 @@ semaphore& raft_group0_client::operation_mutex() {
     return _operation_mutex;
 }
 
+static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
+    auto ts = api::new_timestamp();
+    if (prev_state_id != utils::UUID{}) {
+        auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
+        if (ts <= lower_bound) {
+            ts = lower_bound + 1;
+        }
+    }
+    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
+}
+
 future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as) {
     if (this_shard_id() != 0) {
         // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
@@ -197,15 +215,42 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
     }
 }
 
-static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
-    auto ts = api::new_timestamp();
-    if (prev_state_id != utils::UUID{}) {
-        auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
-        if (ts <= lower_bound) {
-            ts = lower_bound + 1;
-        }
+future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as) {
+    if (this_shard_id() != 0) {
+        // This should not happen since all places which construct `group0_guard` also check that they are on shard 0.
+        // Note: `group0_guard::impl` is private to this module, making this easy to verify.
+        on_internal_error(logger, "add_entry: must run on shard 0");
     }
-    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ts});
+
+    auto new_group0_state_id = generate_group0_state_id(group0_cmd.prev_state_id.value_or(utils::UUID{}));
+
+    raft::command cmd;
+    ser::serialize(cmd, group0_cmd);
+
+    bool retry;
+    do {
+        retry = false;
+        try {
+            co_await _raft_gr.group0().add_entry(cmd, raft::wait_type::applied, as);
+        } catch (const raft::dropped_entry& e) {
+            logger.warn("add_entry: returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
+                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
+            retry = true;
+        } catch (const raft::commit_status_unknown& e) {
+            logger.warn("add_entry: returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
+                    e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
+            retry = true;
+        } catch (const raft::not_a_leader& e) {
+            // This should not happen since follower-to-leader entry forwarding is enabled in group 0.
+            // Just fail the operation by propagating the error.
+            logger.error("add_entry: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
+            throw;
+        }
+
+        // Thanks to the `prev_state_id` check in `group0_state_machine::apply`, the command is idempotent.
+        // It's safe to retry it, even if it means it will be applied multiple times; only the first time
+        // can have an effect.
+    } while (retry);
 }
 
 future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* as) {
@@ -254,6 +299,24 @@ group0_command raft_group0_client::prepare_command(schema_change change, group0_
         // Here it is: the return type of `guard.observerd_group0_state_id()` is `utils::UUID`.
         .prev_state_id{guard.observed_group0_state_id()},
         .new_state_id{guard.new_group0_state_id()},
+
+        .creator_addr{utils::fb_utilities::get_broadcast_address()},
+        .creator_id{_raft_gr.group0().id()}
+    };
+
+    return group0_cmd;
+}
+
+group0_command raft_group0_client::prepare_command(table_query query) {
+    const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
+
+    group0_command group0_cmd {
+        .change{std::move(query)},
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+            new_group0_state_id, _history_gc_duration, "")},
+
+        .prev_state_id{std::nullopt},
+        .new_state_id{new_group0_state_id},
 
         .creator_addr{utils::fb_utilities::get_broadcast_address()},
         .creator_id{_raft_gr.group0().id()}

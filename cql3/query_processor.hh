@@ -21,6 +21,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
+#include "raft/group0_tables/lang.hh"
 #include "service/migration_listener.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "transport/messages/result_message.hh"
