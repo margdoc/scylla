@@ -20,7 +20,7 @@ struct update_query {
 };
 
 struct query {
-    std::variant<select_query, update_query> q;
+    std::variant<raft::group0_tables::select_query, raft::group0_tables::update_query> q;
 };
 
 } // namespace group0_tables

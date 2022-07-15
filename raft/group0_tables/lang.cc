@@ -23,6 +23,7 @@
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include "schema.hh"
+#include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types.hh"
 #include "utils/overloaded_functor.hh"
@@ -176,8 +177,9 @@ query compile(const cql3::cql_statement& statement) {
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> execute(service::raft_group0_client& group0_client, const cql3::cql_statement& statement) {
-    compile(statement);
-    throw exceptions::invalid_request_exception{"executing queries on group0_kv_store is currently not implemented"};
+    auto group0_cmd = group0_client.prepare_command(service::table_query{compile(statement)});
+    co_await group0_client.add_entry_unguarded(std::move(group0_cmd));
+    co_return ::make_shared<cql_transport::messages::result_message::void_message>();
 }
 
 }

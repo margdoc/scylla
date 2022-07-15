@@ -64,12 +64,14 @@ public:
     raft_group0_client(service::raft_group_registry& raft_gr) : _raft_gr(raft_gr) {}
 
     future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source* as = nullptr);
+    future<> add_entry_unguarded(group0_command group0_cmd, seastar::abort_source* as = nullptr);
     bool is_enabled() {
         return _raft_gr.is_enabled();
     }
     future<group0_guard> start_operation(seastar::abort_source* as = nullptr);
 
     group0_command prepare_command(schema_change change, group0_guard& guard, std::string_view description);
+    group0_command prepare_command(table_query query);
 
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
