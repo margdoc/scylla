@@ -320,4 +320,20 @@ group0_command raft_group0_client::prepare_command(table_query query) {
     return group0_cmd;
 }
 
+void raft_group0_client::set_query_result(utils::UUID query_id, raft::group0_tables::query_result qr) {
+    _results.emplace(query_id, std::move(qr));
+}
+
+raft::group0_tables::query_result raft_group0_client::get_query_result(utils::UUID query_id) {
+    assert(_results.contains(query_id));
+
+    return std::move(_results[query_id]);
+}
+
+void raft_group0_client::remove_query_result(utils::UUID query_id) {
+    if (_results.contains(query_id)) {
+        _results.erase(query_id);
+    }
+}
+
 }

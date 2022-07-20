@@ -530,6 +530,7 @@ set(scylla_sources
     query-result-set.cc
     raft/fsm.cc
     raft/group0_tables/lang.cc
+    raft/group0_tables/query_result.cc
     raft/log.cc
     raft/raft.cc
     raft/server.cc

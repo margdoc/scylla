@@ -13,6 +13,7 @@
 #include "message/messaging_service.hh"
 #include "canonical_mutation.hh"
 #include "raft/group0_tables/lang.hh"
+#include "raft/group0_tables/query_result.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
 #include "serialization_visitors.hh"
@@ -34,6 +35,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "partition_slice_builder.hh"
 #include "utils/overloaded_functor.hh"
+#include <optional>
 
 namespace service {
 
@@ -72,12 +74,12 @@ get_atomic_cell(const schema_ptr& schema, mutation& mutation, const bytes& name)
     return mutation.partition().clustered_row(*schema, clustering_key::make_empty()).cells().cell_at(column_definition->id).as_atomic_cell(*column_definition);
 }
 
-static future<> execute_group0_table_query(
+static future<raft::group0_tables::query_result> execute_group0_table_query(
     storage_proxy& proxy,
     const table_query& query,
     const service::group0_command& cmd) {
     return std::visit(overloaded_functor {
-    [&] (const raft::group0_tables::select_query& q) -> future<> {
+    [&] (const raft::group0_tables::select_query& q) -> future<raft::group0_tables::query_result> {
         const auto schema = db::system_keyspace::group0_kv_store();
         const auto* column_definition = schema->get_column_definition("value");
 
@@ -86,7 +88,7 @@ static future<> execute_group0_table_query(
         auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
 
         if (rs->partitions().empty()) {
-            co_return;
+            co_return raft::group0_tables::query_result_select{};
         }
 
         assert(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
@@ -95,9 +97,11 @@ static future<> execute_group0_table_query(
         auto mutation = p.mut().unfreeze(schema);
         const auto cell = get_atomic_cell(schema, mutation, "value");
 
-        // TODO return result
+        co_return raft::group0_tables::query_result_select{
+                .value = cell.value().linearize()
+            };
     },
-    [&] (const raft::group0_tables::update_query& q) -> future<> {
+    [&] (const raft::group0_tables::update_query& q) -> future<raft::group0_tables::query_result> {
         const auto& _cmd = cmd;
         auto& _proxy = proxy;
 
@@ -115,8 +119,12 @@ static future<> execute_group0_table_query(
             ? rs->partitions()[0].mut().unfreeze(schema)
             : mutation(schema, partition_key::from_single_value(*schema, to_bytes(q.key)));
 
-        const std::optional<atomic_cell_view> cell = found
+        const auto cell = found
             ? std::optional<atomic_cell_view>{get_atomic_cell(schema, new_mutation, "value")}
+            : std::nullopt;
+
+        const auto previous_value = found
+            ? bytes_opt{cell->value().linearize()}
             : std::nullopt;
 
         bool is_conditional = q.value_condition.has_value();
@@ -133,6 +141,15 @@ static future<> execute_group0_table_query(
 
             new_mutation.set_clustered_cell(clustering_key::make_empty(), "value", utf8_type->deserialize(q.new_value), ts);
             co_await _proxy.mutate_locally(new_mutation, {}, {});
+        }
+
+        if (is_conditional) {
+            co_return raft::group0_tables::query_result_conditional_update{
+                    .is_applied = is_applied,
+                    .previous_value = previous_value
+                };
+        } else {
+            co_return raft::group0_tables::query_result_none{};
         }
     }
     }, query.query.q);
@@ -184,7 +201,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         },
         [&] (table_query& query) -> future<> {
-            return execute_group0_table_query(_sp, query, cmd);
+            auto& client = _client;
+            auto result = co_await execute_group0_table_query(_sp, query, cmd);
+            client.set_query_result(cmd.new_state_id, std::move(result));
         }
         ), cmd.change);
 
