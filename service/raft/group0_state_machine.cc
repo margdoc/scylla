@@ -7,8 +7,11 @@
  */
 #include "service/raft/group0_state_machine.hh"
 #include <fmt/core.h>
+#include <optional>
 #include <seastar/core/coroutine.hh>
 #include "service/migration_manager.hh"
+#include "atomic_cell.hh"
+#include "bytes.hh"
 #include "cql3/result_generator.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
@@ -20,9 +23,12 @@
 #include "concrete_types.hh"
 #include "mutation_partition.hh"
 #include "raft/group0_tables/lang.hh"
+#include "raft/group0_tables/query_result.hh"
+#include "schema.hh"
 #include "schema_mutations.hh"
 #include "frozen_schema.hh"
 #include "seastar/core/future.hh"
+#include "seastar/core/sharded.hh"
 #include "seastarx.hh"
 #include "serialization_visitors.hh"
 #include "serializer.hh"
@@ -77,59 +83,58 @@ prepare_read_command(storage_proxy& proxy, const schema& schema, const std::stri
     return {make_lw_shared<query::read_command>(schema.id(), schema.version(), slice, proxy.get_max_result_size(slice)), range};
 }
 
-static future<query_result> execute_group0_table_query(
+static
+atomic_cell_view get_cell(
+    mutation& mutation,
+    const schema_ptr& schema) {
+    const auto* column = schema->get_column_definition("value");
+    return mutation.partition().clustered_row(*schema, clustering_key::make_empty()).cells().cell_at(column->id).as_atomic_cell(*column);
+}
+
+static future<raft::group0_tables::query_result> execute_group0_table_query(
     storage_proxy& proxy,
     const table_query& query,
     const service::group0_command& cmd) {
     return std::visit(overloaded_functor {
-    [&] (const raft::group0_tables::select_query& q) -> future<query_result> {
+    [&] (const raft::group0_tables::select_query& q) -> future<raft::group0_tables::query_result> {
         const auto schema = db::system_keyspace::group0_kv_store();
-        const auto *column_definition = schema->get_column_definition("value");
 
         // Read mutations
         const auto [read_cmd, range] = prepare_read_command(proxy, *schema, q.key);
-        const auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
+        auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
 
-        // Change mutations to result set
-        auto qr = co_await to_data_query_result(*rs, schema, read_cmd->slice, read_cmd->get_row_limit(), read_cmd->partition_limit);
-        const auto view = query::result_view(std::move(qr));
-        const auto selection = cql3::selection::selection::for_columns(schema, {column_definition});
-        cql3::selection::result_set_builder builder(*selection, {}, cql_serialization_format::latest());
-        cql3::selection::result_set_builder::visitor visitor(builder, *schema, *selection);
-        view.consume(read_cmd->slice, visitor);
+        if (rs->partitions().empty()) {
+            co_return raft::group0_tables::query_result_select{};
+        }
 
-        co_return ::make_shared<cql_transport::messages::result_message::rows>(
-            cql3::result(builder.build())
-        );
+        assert(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
+
+        const auto& p = rs->partitions()[0];
+        auto mutation = p.mut().unfreeze(schema);
+        const auto cell = get_cell(mutation, schema);
+
+        co_return raft::group0_tables::query_result_select{
+                .value = cell.value().linearize()
+            };
     },
-    [&] (const raft::group0_tables::update_query& q) -> future<query_result> {
+    [&] (const raft::group0_tables::update_query& q) -> future<raft::group0_tables::query_result> {
         const auto& _cmd = cmd;
         auto& _proxy = proxy;
 
         const auto schema = db::system_keyspace::group0_kv_store();
-        const auto *column_definition = schema->get_column_definition("value");
 
         // Read mutations
         const auto [read_cmd, range] = prepare_read_command(proxy, *schema, q.key);
-        const auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
+        auto [rs, _] = co_await proxy.query_mutations_locally(schema, read_cmd, range, db::no_timeout);
 
-        if (rs->partitions().empty()) {
-            if (!q.value_condition) {
-                mutation mutation(schema, partition_key::from_single_value(*schema, to_bytes(q.key)));
-                auto ts = utils::UUID_gen::micros_timestamp(_cmd.new_state_id);
-
-                mutation.set_clustered_cell(clustering_key::make_empty(), "value", data_value(q.new_value), ts);
-                co_await _proxy.mutate_locally(mutation, {}, {});
-            }
-        } else {
+        if (!rs->partitions().empty()) {
             assert(rs->partitions().size() == 1); // In this version only one value per partition key is allowed.
 
             auto& p = rs->partitions()[0];
             auto mutation = p.mut().unfreeze(schema);
-            const auto &cell = mutation.partition().clustered_row(*schema, clustering_key::make_empty()).cells().cell_at(column_definition->id).as_atomic_cell(*column_definition);
-            const auto cell_value = utf8_type->deserialize(cell.value());
+            auto cell = get_cell(mutation, schema);
 
-            if (!q.value_condition || data_value(*q.value_condition) == cell_value) {
+            if (!q.value_condition || to_bytes(*q.value_condition) == cell.value().linearize()) {
                 auto old_ts = cell.timestamp();
                 auto from_state_id = utils::UUID_gen::micros_timestamp(_cmd.new_state_id);
                 auto ts = std::max(from_state_id, old_ts + 1);
@@ -137,9 +142,17 @@ static future<query_result> execute_group0_table_query(
                 mutation.set_clustered_cell(clustering_key::make_empty(), "value", data_value(q.new_value), ts);
                 co_await _proxy.mutate_locally(mutation, {}, {});
             }
+        } else {
+            if (!q.value_condition) {
+                mutation mutation(schema, partition_key::from_single_value(*schema, to_bytes(q.key)));
+                auto ts = utils::UUID_gen::micros_timestamp(_cmd.new_state_id);
+
+                mutation.set_clustered_cell(clustering_key::make_empty(), "value", data_value(q.new_value), ts);
+                co_await _proxy.mutate_locally(mutation, {}, {});
+            }
         }
 
-        co_return ::shared_ptr<cql_transport::messages::result_message>{};
+        co_return raft::group0_tables::query_result_none{};
     }
     }, query.query.q);
 }
@@ -190,7 +203,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             return _mm.merge_schema_from(netw::messaging_service::msg_addr(std::move(cmd.creator_addr)), std::move(chng.mutations));
         },
         [&] (table_query& query) -> future<> {
-            return execute_group0_table_query(_sp, query, cmd).discard_result();
+            auto& client = _client;
+            auto result = co_await execute_group0_table_query(_sp, query, cmd);
+            client.set_query_result(cmd.new_state_id, std::move(result));
         }
         ), cmd.change);
 

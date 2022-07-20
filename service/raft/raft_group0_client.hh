@@ -13,6 +13,8 @@
 #include <memory>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/abort_source.hh>
+#include "raft/group0_tables/lang.hh"
+#include "raft/group0_tables/query_result.hh"
 #include "seastar/core/shared_ptr.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "utils/UUID.hh"
@@ -52,8 +54,6 @@ public:
     {}
 };
 
-using query_result = ::shared_ptr<cql_transport::messages::result_message>;
-
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
     friend class group0_state_machine;
@@ -63,6 +63,8 @@ class raft_group0_client {
     semaphore _operation_mutex = semaphore(1);
 
     gc_clock::duration _history_gc_duration = gc_clock::duration{std::chrono::duration_cast<gc_clock::duration>(std::chrono::weeks{1})};
+
+    std::unordered_map<utils::UUID, raft::group0_tables::query_result> _results;
 public:
     raft_group0_client(service::raft_group_registry& raft_gr) : _raft_gr(raft_gr) {}
 
@@ -79,6 +81,10 @@ public:
     // for test only
     void set_history_gc_duration(gc_clock::duration d);
     semaphore& operation_mutex();
+
+    void set_query_result(utils::UUID query_id, raft::group0_tables::query_result qr);
+    raft::group0_tables::query_result get_query_result(utils::UUID query_id);
+    void remove_query_result(utils::UUID query_id);
 };
 
 }

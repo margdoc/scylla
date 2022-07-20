@@ -14,7 +14,7 @@
 
 #include "frozen_schema.hh"
 #include "schema_mutations.hh"
-#include "seastar/core/shared_ptr.hh"
+#include "seastar/core/future.hh"
 #include "serialization_visitors.hh"
 #include "serializer.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -30,7 +30,6 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "utils/UUID.hh"
-#include "transport/messages/result_message.hh"
 
 
 namespace service {
@@ -323,6 +322,22 @@ group0_command raft_group0_client::prepare_command(table_query query) {
     };
 
     return group0_cmd;
+}
+
+void raft_group0_client::set_query_result(utils::UUID query_id, raft::group0_tables::query_result qr) {
+    _results.emplace(query_id, std::move(qr));
+}
+
+raft::group0_tables::query_result raft_group0_client::get_query_result(utils::UUID query_id) {
+    assert(_results.contains(query_id));
+
+    return std::move(_results[query_id]);
+}
+
+void raft_group0_client::remove_query_result(utils::UUID query_id) {
+    if (_results.contains(query_id)) {
+        _results.erase(query_id);
+    }
 }
 
 }
