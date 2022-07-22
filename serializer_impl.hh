@@ -644,6 +644,26 @@ struct serializer<sstring> {
     }
 };
 
+template<>
+struct serializer<std::string> {
+    template<typename Input>
+    static std::string read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::string v = uninitialized_string(sz);
+        in.read(v.data(), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::string& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(v.data(), v.size());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        in.skip(deserialize(in, boost::type<size_type>()));
+    }
+};
+
 template<typename T>
 struct serializer<std::unique_ptr<T>> {
     template<typename Input>
