@@ -256,6 +256,8 @@ public:
     future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
+
+    virtual void prepare_raft_command() const {}
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been

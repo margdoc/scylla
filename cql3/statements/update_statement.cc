@@ -9,6 +9,7 @@
  */
 
 #include "update_statement.hh"
+#include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "raw/update_statement.hh"
 
 #include "raw/insert_statement.hh"
@@ -16,6 +17,8 @@
 
 #include "cql3/operation_impl.hh"
 #include "cql3/type_json.hh"
+#include "db/config.hh"
+#include "raft/group0_tables/lang.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"
@@ -117,6 +120,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
             }
         }
     } else {
+        
         // If there are static columns, there also must be clustering columns, in which
         // case empty prefix can only refer to the static row.
         bool is_static_prefix = s->has_static_columns() && prefix.is_empty(*s);
@@ -351,10 +355,22 @@ update_statement::update_statement(cf_name name,
 { }
 
 ::shared_ptr<cql3::statements::modification_statement>
+update_statement::make_statement(data_dictionary::database db, schema_ptr schema,
+    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
+{
+    if (db.get_config().check_experimental(db::experimental_features_t::feature::GROUP0_TABLES) &&
+        raft::group0_tables::is_group0_table_statement(keyspace(), column_family())) [[unlikely]] {
+        return ::make_shared<cql3::statements::strongly_consistent_modification_statement>(statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    } else {
+        return ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    }
+}
+
+::shared_ptr<cql3::statements::modification_statement>
 update_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = make_statement(db, schema, ctx, std::move(attrs), stats);
 
     // FIXME: quadratic
     for (size_t i = 0; i < _updates.size(); ++i) {
@@ -384,6 +400,8 @@ update_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
+
+    stmt->prepare_raft_command();
     return stmt;
 }
 

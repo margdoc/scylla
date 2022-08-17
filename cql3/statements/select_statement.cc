@@ -14,6 +14,8 @@
 #include "cql3/query_processor.hh"
 #include "cql3/statements/prune_materialized_view_statement.hh"
 
+#include "cql3/stats.hh"
+#include "raft/group0_tables/lang.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -870,6 +872,68 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
     }
 }
 
+static
+managed_bytes get_key(const cql3::expr::expression& partition_key_restrictions) {
+    const auto* conjunction = cql3::expr::as_if<cql3::expr::conjunction>(&partition_key_restrictions);
+
+    if (!conjunction || conjunction->children.size() != 1) {
+        throw raft::group0_tables::unsupported_operation_error{"partition key restriction: {}", partition_key_restrictions};
+    }
+
+    const auto* key_restriction = cql3::expr::as_if<cql3::expr::binary_operator>(&conjunction->children[0]);
+
+    if (!key_restriction) {
+        throw raft::group0_tables::unsupported_operation_error{"partition key restriction: {}", *conjunction};
+    }
+
+    const auto* column = cql3::expr::as_if<cql3::expr::column_value>(&key_restriction->lhs);
+    const auto* value = cql3::expr::as_if<cql3::expr::constant>(&key_restriction->rhs);
+
+    if (!column || column->col->kind != column_kind::partition_key ||
+        !value || key_restriction->op != cql3::expr::oper_t::EQ) {
+        throw raft::group0_tables::unsupported_operation_error{"key restriction: {}", *key_restriction};
+    }
+
+    return managed_bytes{to_bytes(value->view())};
+}
+
+static
+bool is_selecting_only_value(const cql3::selection::selection& selection) {
+    return selection.is_trivial() &&
+           selection.get_column_count() == 1 &&
+           selection.get_columns()[0]->name() == "value";
+}
+
+strongly_consistent_select_statement::strongly_consistent_select_statement(schema_ptr schema, uint32_t bound_terms,
+                                                                           lw_shared_ptr<const parameters> parameters,
+                                                                           ::shared_ptr<selection::selection> selection,
+                                                                           ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+                                                                           ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+                                                                           bool is_reversed,
+                                                                           ordering_comparator_type ordering_comparator,
+                                                                           std::optional<expr::expression> limit,
+                                                                           std::optional<expr::expression> per_partition_limit,
+                                                                           cql_stats &stats,
+                                                                           std::unique_ptr<attributes> attrs)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, std::move(limit), std::move(per_partition_limit), stats, std::move(attrs)},
+      _query{prepare_query()}
+{ }
+
+raft::group0_tables::select_query strongly_consistent_select_statement::prepare_query() const {
+    if (!is_selecting_only_value(*_selection)) {
+        throw raft::group0_tables::unsupported_operation_error{"only 'value' selector is allowed"};
+    }
+
+    return {
+        .key = get_key(_restrictions->get_partition_key_restrictions())
+    };
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) {
+    throw exceptions::invalid_request_exception{"executing queries on group0_kv_store is currently not implemented"};
+}
+
 ::shared_ptr<cql3::statements::select_statement>
 indexed_table_select_statement::prepare(data_dictionary::database db,
                                         schema_ptr schema,
@@ -1693,7 +1757,23 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             stats,
             std::move(prepared_attrs)
         );
-    } else {
+    } else if (db.get_config().check_experimental(db::experimental_features_t::feature::GROUP0_TABLES) &&
+               raft::group0_tables::is_group0_table_statement(keyspace(), column_family())) [[unlikely]] {
+        stmt = ::make_shared<cql3::statements::strongly_consistent_select_statement>(
+                schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    }
+    else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,
                 ctx.bound_variables_size(),

@@ -424,6 +424,7 @@ set(scylla_sources
     cql3/statements/sl_prop_defs.cc
     cql3/statements/truncate_statement.cc
     cql3/statements/update_statement.cc
+    cql3/statements/strongly_consistent_modification_statement.cc
     cql3/statements/use_statement.cc
     cql3/type_json.cc
     cql3/untyped_result_set.cc
