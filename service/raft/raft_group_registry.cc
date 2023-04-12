@@ -192,9 +192,11 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_append_entries(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
         raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
-        return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request), original_shard_id = this_shard_id()] (raft_rpc& rpc) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [dst, from, append_request = std::move(append_request), original_shard_id = this_shard_id()] (raft_rpc& rpc) mutable {
             // lw_shared_ptr (raft::log_entry_ptr) doesn't support cross-shard ref counting (see debug_shared_ptr_counter_type),
             // so we are copying entries to this shard if it isn't equal the original one.
+            rslog.trace("Got append_entries from {} to {} received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
+                        from, dst, append_request.current_term, append_request.prev_log_idx, append_request.prev_log_term, append_request.leader_commit_idx, append_request.entries.size() ? append_request.entries[0]->idx : raft::index_t(0), append_request.entries.size());
             rpc.append_entries(std::move(from),
                 this_shard_id() == original_shard_id ? std::move(append_request) : append_request.copy());
         });
@@ -335,7 +337,7 @@ seastar::future<> raft_group_registry::start(raft::server_id my_id) {
     init_rpc_verbs();
 
     _direct_fd_subscription.emplace(co_await _direct_fd.register_listener(*_direct_fd_proxy,
-        direct_fd_clock::base::duration{std::chrono::seconds{1}}.count()));
+        direct_fd_clock::base::duration{std::chrono::seconds{5}}.count()));
 }
 
 const raft::server_id& raft_group_registry::get_my_raft_id() {

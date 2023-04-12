@@ -11,6 +11,7 @@
 
 #include "storage_service.hh"
 #include "dht/boot_strapper.hh"
+#include <chrono>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -20,6 +21,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
 #include <seastar/core/smp.hh>
+#include <seastar/core/sleep.hh>
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
@@ -1934,7 +1936,10 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             assert(_group0);
             bool raft_available = _group0->wait_for_raft().get();
             if (raft_available) {
+                using namespace std::chrono;
                 slogger.info("Replace: removing {}/{} from group 0...", replace_addr, raft_id);
+                sleep(10s).get();
+                slogger.info("(continue) Replace: removing {}/{} from group 0...", replace_addr, raft_id);
                 _group0->remove_from_group0(raft_id).get();
             }
 

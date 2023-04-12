@@ -122,7 +122,8 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--abort-on-lsa-bad-alloc', '1',
     '--abort-on-seastar-bad-alloc',
     '--abort-on-internal-error', '1',
-    '--abort-on-ebadf', '1'
+    '--abort-on-ebadf', '1',
+    '--logger-log-level', 'raft=trace:raft_group_registry=trace',
 ]
 
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
