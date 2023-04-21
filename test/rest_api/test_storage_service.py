@@ -530,6 +530,9 @@ def test_repair_while_table_is_dropped(cql, this_dc, rest_api):
                         assert len(task_ids) == 1, f"There should be exactly one task with sequence number {sequence_number}"
                         task_id = task_ids[0]
 
+                        time.sleep(1)
+                        cql.execute(f"DROP TABLE {table_to_be_dropped}")
+
                         # Check if it task finished successfully.
                         status = wait_for_task(rest_api, task_id)
                         assert status["state"] == "done"

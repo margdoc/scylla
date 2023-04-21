@@ -1110,9 +1110,20 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
 }
 
 void inject_table_drop(sstring name, replica::database& db) {
-    utils::get_local_injector().inject(name, [&db] () -> future<> {
-        co_await db.drop_table_on_all_shards(db.container(), "repair_while_table_is_dropped_keyspace", "table_to_be_dropped");
+    promise<> p;
+    bool wait{false};
+
+    utils::get_local_injector().inject(name, [&p, &wait] () {
+        wait = true;
+        using namespace std::chrono_literals;
+        (void)sleep(5s).then([&p] { p.set_value(); });
     });
+
+    if (wait) {
+        rlogger.info(">>>>>>>>>>>>>>>> Waiting...");
+        p.get_future().get();
+        rlogger.info(">>>>>>>>>>>>>>>> Waited...");
+    }
 }
 
 future<> repair::user_requested_repair_task_impl::run() {
