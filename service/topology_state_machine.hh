@@ -68,6 +68,7 @@ struct replica_state {
 struct topology {
     enum class transition_state: uint8_t {
         commit_cdc_generation,
+        publish_cdc_generation,
         write_both_read_old,
         write_both_read_new,
     };
