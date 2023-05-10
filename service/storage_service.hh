@@ -798,6 +798,7 @@ private:
     // This is called on all nodes for each new command received through raft
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_transition(storage_proxy& proxy, cdc::generation_service&, gms::inet_address, std::vector<canonical_mutation>);
+    future<> write_topology_mutations(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load(cdc::generation_service&);

@@ -108,6 +108,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         },
         [&] (topology_change& chng) -> future<> {
            return _ss.topology_transition(_sp, _cdc_gen_svc, cmd.creator_addr, std::move(chng.mutations));
+        },
+        [&] (write_mutations& muts) -> future<> {
+           return _ss.write_topology_mutations(_sp, cmd.creator_addr, std::move(muts.mutations));
         }
         ), cmd.change);
 

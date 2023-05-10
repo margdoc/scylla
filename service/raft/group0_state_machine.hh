@@ -37,8 +37,12 @@ struct topology_change {
     std::vector<canonical_mutation> mutations;
 };
 
+struct write_mutations {
+    std::vector<canonical_mutation> mutations;
+};
+
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change> change;
+    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;

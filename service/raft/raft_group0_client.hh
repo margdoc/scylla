@@ -129,7 +129,7 @@ public:
 
     group0_command prepare_command(broadcast_table_query query);
     template<typename Command>
-    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change>
+    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations>
     group0_command prepare_command(Command change, group0_guard& guard, std::string_view description);
 
     // Returns the current group 0 upgrade state.

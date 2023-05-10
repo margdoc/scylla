@@ -423,6 +423,14 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 }
 
 future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generation_service& cdc_gen_svc, gms::inet_address from, std::vector<canonical_mutation> cms) {
+    co_await write_topology_mutations(proxy, from, std::move(cms));
+
+    co_await topology_state_load(cdc_gen_svc); // reload new state
+
+    _topology_state_machine.event.signal();
+}
+
+future<> storage_service::write_topology_mutations(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
     assert(this_shard_id() == 0);
     // write new state into persistent storage
     std::vector<mutation> mutations;
@@ -438,10 +446,6 @@ future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generat
     }
 
     co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
-
-    co_await topology_state_load(cdc_gen_svc); // reload new state
-
-    _topology_state_machine.event.signal();
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
