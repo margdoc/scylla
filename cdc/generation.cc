@@ -25,6 +25,7 @@
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 
 #include "cdc/generation.hh"
@@ -288,6 +289,10 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         auto ckey = clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end));
         res.back().set_cell(ckey, to_bytes("streams"), make_set_value(db::cdc_streams_set_type, std::move(streams)), ts);
         res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
+
+        utils::get_local_injector().inject("cdc_generation_mutations_overestimate", [&size_estimate] {
+            size_estimate = std::numeric_limits<decltype(size_estimate)>::max();
+        });
 
         co_await coroutine::maybe_yield();
     }
