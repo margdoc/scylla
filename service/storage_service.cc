@@ -20,6 +20,10 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
 #include <seastar/core/smp.hh>
+#include "mutation/canonical_mutation.hh"
+#include "seastar/core/on_internal_error.hh"
+#include "service/raft/group0_state_machine.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
@@ -917,23 +921,51 @@ class topology_coordinator {
         auto gen_table_schema = _db.find_schema(
             db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
 
-        // FIXME: the CDC generation data can be large and not fit in a single command
-        // (for large clusters, it will introduce reactor stalls and go over commitlog entry
-        // size limit). We need to split it into multiple mutations by smartly picking
-        // a `mutation_size_threshold` and sending each mutation as a separate group 0 command.
-        // We also don't want to serialize the commands - there may be many of them,
-        // and we don't want to wait for a network round-trip to a quorum between each command.
-        // So we need to introduce a mechanism for group 0 to send a sequence of commands
-        // that can be committed concurrently. Also we need to be careful with memory consumption
-        // with many large mutations.
-        // See `system_distributed_keyspace::insert_cdc_generation` for inspiration how it
-        // was done when the mutations were stored in a regular distributed table.
         const size_t max_command_size = _raft.max_command_size();
         const size_t mutation_size_threshold = std::max(max_command_size / 2, max_command_size - 10 * 1024);
         auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
             gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, guard.write_timestamp());
 
         co_return std::pair{gen_uuid, std::move(gen_mutations)};
+    }
+
+    // Broadcasts all mutations returned from prepare_new_cdc_generation_data except the last one.
+    // Each mutation is sent in separate raft command and is retried as long as group0_concurrent_modification occurs.
+    // It takes group0_guard and creates a new one for each mutation. Commands are sent sequentially.
+    // Returns the generation's UUID, last created guard and last mutation which
+    // will be sent with additional topology data by the caller.
+    future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
+            locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
+        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, binfo);
+
+        if (gen_mutations.empty()) {
+            on_internal_error(slogger, "cdc_generation_data: gen_mutations is empty");
+        }
+
+        std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
+
+        for (size_t i{0}; i < updates.size() - 1; ++i) {
+            bool done{false};
+
+            auto const reason = format(
+                "insert CDC generation data (UUID: {}), part {}/{}", gen_uuid, i + 1, updates.size());
+
+            while (!done) {
+                try {
+                    slogger.trace("raft topology: do update {} reason {}", updates[i], reason);
+                    write_mutations change{{std::move(updates[i])}};
+                    group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
+                    co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard));
+                    done = true;
+                } catch (group0_concurrent_modification&) {
+                    slogger.info("raft topology: race while changing state: {}. Retrying", reason);
+                }
+
+                guard = co_await start_operation();
+            }
+        }
+
+        co_return std::tuple{gen_uuid, std::move(guard), std::move(updates.back())};
     }
 
     // Precondition: there is no node request and no ongoing topology transition
@@ -944,17 +976,15 @@ class topology_coordinator {
             slogger.info("raft topology: new CDC generation requested");
 
             auto tmptr = get_token_metadata_ptr();
-            auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(tmptr, guard, std::nullopt);
+            auto [gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), std::nullopt);
 
-            std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
-            topology_mutation_builder builder(guard.write_timestamp());
+            topology_mutation_builder builder(guard_.write_timestamp());
             builder.set_transition_state(topology::transition_state::commit_cdc_generation)
                    .set_new_cdc_generation_data_uuid(gen_uuid)
                    .set_global_topology_request(std::nullopt);
-            updates.push_back(builder.build());
             auto reason = format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
-            co_await update_topology_state(std::move(guard), {std::move(updates)}, reason);
+            co_await update_topology_state(std::move(guard_), {std::move(mutation), builder.build()}, reason);
         }
             break;
         }
@@ -1186,9 +1216,8 @@ class topology_coordinator {
                         auto bootstrap_tokens = dht::boot_strapper::get_random_bootstrap_tokens(
                                 tmptr, num_tokens, dht::check_token_endpoint::yes);
 
-                        auto [gen_uuid, gen_mutations] = co_await prepare_new_cdc_generation_data(
-                                tmptr, node.guard, bootstrapping_info{bootstrap_tokens, *node.rs});
-                        std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
+                        auto [gen_uuid, guard, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
+                                tmptr, take_guard(std::move(node)), bootstrapping_info{bootstrap_tokens, *node.rs});
 
                         // Write chosen tokens and CDC generation data through raft.
                         builder.set_transition_state(topology::transition_state::commit_cdc_generation)
@@ -1197,10 +1226,9 @@ class topology_coordinator {
                                .set("node_state", node_state::bootstrapping)
                                .del("topology_request")
                                .set("tokens", bootstrap_tokens);
-                        updates.push_back(builder.build());
                         auto reason = format(
                             "bootstrap: assign tokens and insert CDC generation data (UUID: {})", gen_uuid);
-                        co_await update_topology_state(take_guard(std::move(node)), {std::move(updates)}, reason);
+                        co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
                         break;
                         }
                     case topology_request::leave:
