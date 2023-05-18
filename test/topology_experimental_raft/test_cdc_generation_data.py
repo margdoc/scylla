@@ -6,14 +6,14 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_send_data_in_parts(manager: ManagerClient):
-    first_server = await manager.server_add()
+    first_server = await manager.server_add(config={
+        'commitlog_segment_size_in_mb': 2
+    })
 
     async with inject_error(manager.api, first_server.ip_addr, 'cdc_generation_mutations_overestimate'):
-        # cdc generation data should be sent in parts
-        for _ in range(2):
-            await manager.server_add()
-
-    # cdc generation data should be sent in one piece
-    await manager.server_add()
+        for _ in range(3):
+            await manager.server_add(config={
+                'commitlog_segment_size_in_mb': 2
+            })
 
     await check_token_ring_and_group0_consistency(manager)

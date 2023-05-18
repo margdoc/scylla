@@ -7,6 +7,7 @@
  */
 
 #include <boost/type.hpp>
+#include <limits>
 #include <random>
 #include <unordered_set>
 #include <algorithm>
@@ -273,28 +274,33 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
     res.emplace_back(s, partition_key::from_singular(*s, id));
     res.back().set_static_cell(to_bytes("num_ranges"), int32_t(desc.entries().size()), ts);
     size_t size_estimate = 0;
-    for (auto& e : desc.entries()) {
-        if (size_estimate >= mutation_size_threshold) {
-            res.emplace_back(s, partition_key::from_singular(*s, id));
-            size_estimate = 0;
+    size_t repetitions = 1;
+    utils::get_local_injector().inject("cdc_generation_mutations_overestimate", [&repetitions] {
+        repetitions = 100;
+    });
+
+    for (size_t r{0}; r < repetitions; ++r) {
+        for (auto& e : desc.entries()) {
+            if (size_estimate >= mutation_size_threshold) {
+                res.emplace_back(s, partition_key::from_singular(*s, id));
+                size_estimate = 0;
+            }
+
+            set_type_impl::native_type streams;
+            streams.reserve(e.streams.size());
+            for (auto& stream: e.streams) {
+                streams.push_back(data_value(stream.to_bytes()));
+            }
+
+            size_estimate += e.streams.size() * 20;
+            auto ckey = clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end));
+            res.back().set_cell(ckey, to_bytes("streams"), make_set_value(db::cdc_streams_set_type, std::move(streams)), ts);
+            res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
+
+            co_await coroutine::maybe_yield();
         }
 
-        set_type_impl::native_type streams;
-        streams.reserve(e.streams.size());
-        for (auto& stream: e.streams) {
-            streams.push_back(data_value(stream.to_bytes()));
-        }
-
-        size_estimate += e.streams.size() * 20;
-        auto ckey = clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end));
-        res.back().set_cell(ckey, to_bytes("streams"), make_set_value(db::cdc_streams_set_type, std::move(streams)), ts);
-        res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
-
-        utils::get_local_injector().inject("cdc_generation_mutations_overestimate", [&size_estimate] {
-            size_estimate = std::numeric_limits<decltype(size_estimate)>::max();
-        });
-
-        co_await coroutine::maybe_yield();
+        size_estimate = std::numeric_limits<size_t>::max();
     }
 
     co_return res;
