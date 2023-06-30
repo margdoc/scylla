@@ -1084,7 +1084,7 @@ class topology_coordinator {
 
                 slogger.trace("raft topology: do update {} reason {}", m, reason);
                 write_mutations change{{std::move(m)}};
-                group0_command g0_cmd = _group0.client().prepare_command(std::move(change));
+                group0_command g0_cmd = _group0.client().prepare_command(std::move(change), reason);
                 return _group0.client().add_entry_unguarded(std::move(g0_cmd));
             });
 
