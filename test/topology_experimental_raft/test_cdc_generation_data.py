@@ -22,7 +22,7 @@ async def test_send_data_in_parts(manager: ManagerClient):
     await check_token_ring_and_group0_consistency(manager)
 
     cql = manager.get_cql()
-    rows = await cql.run_async("SELECT description FROM system.group0_history", host=first_server.ip_addr)
+    rows = await cql.run_async("SELECT description FROM system.group0_history")
 
     for row in rows:
         if row.description.startswith('insert CDC generation data (UUID: ') and row.description.endswith('), part'):

@@ -34,7 +34,7 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
-    , _max_mutation_size(_qp.db().get_config().commitlog_segment_size_in_mb() * 1024 * 1204 / 2)
+    , _max_mutation_size(_qp.db().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 4)
 {
     static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
         db::system_keyspace::RAFT);

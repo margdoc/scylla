@@ -1080,7 +1080,7 @@ class topology_coordinator {
         if (updates.size() > 1) {
             release_guard(std::move(guard));
 
-            co_await parallel_for_each(updates.begin(), updates.end() - 1, [this, gen_uuid = gen_uuid] (canonical_mutation& m) {
+            co_await parallel_for_each(updates.begin(), std::prev(updates.end()), [this, gen_uuid = gen_uuid] (canonical_mutation& m) {
                 auto const reason = format(
                     "insert CDC generation data (UUID: {}), part", gen_uuid);
 
@@ -5408,10 +5408,13 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                         rs->partitions(), std::back_inserter(topology_mutations), [s] (const partition& p) {
                     return canonical_mutation{p.mut().unfreeze(s)};
                 });
+
+                curr_cdc_gen_id = ss._topology_state_machine._topology.current_cdc_generation_id;
             }
 
             std::vector<canonical_mutation> cdc_generation_mutations;
             if (curr_cdc_gen_id) {
+                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
                 auto rs = co_await db::system_keyspace::query_mutations(
                     db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
                 auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
