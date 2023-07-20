@@ -468,6 +468,10 @@ void print_starting_message(int ac, char** av, const bpo::parsed_options& opts) 
 template <typename Func>
 static auto defer_verbose_shutdown(const char* what, Func&& func) {
     auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
+        if (strcmp(what, "Raft") == 0) {
+            utils::get_local_injector().inject("stop_raft::sleep", std::chrono::seconds{7}).get();
+        }
+
         startlog.info("Shutting down {}", what);
         try {
             func();
