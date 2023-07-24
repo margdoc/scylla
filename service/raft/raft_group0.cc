@@ -366,6 +366,8 @@ future<group0_info> persistent_discovery::run(
 }
 
 future<> raft_group0::abort() {
+    co_await stop_group0();
+
     co_await smp::invoke_on_all([this]() {
         return uninit_rpc_verbs(_ms.local());
     });
@@ -729,6 +731,12 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             upgrade_to_group0(ss, qp, mm, cdc_gen_service).get();
         });
     });
+}
+
+future<> raft_group0::stop_group0() {
+    if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
+        co_await _raft_gr.stop_server(*group0_id, "raft group0 is stopped");
+    }
 }
 
 bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {

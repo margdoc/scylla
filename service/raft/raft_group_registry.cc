@@ -335,6 +335,18 @@ static void ensure_aborted(raft_server_for_group& server_for_group, sstring reas
     }
 }
 
+future<> raft_group_registry::stop_server(raft::group_id gid, sstring reason) {
+    auto it = _servers.find(gid);
+
+    if (it == _servers.end()) {
+        throw raft_group_not_found(gid);
+    }
+
+    ensure_aborted(it->second, std::move(reason));
+    co_await std::move(*it->second.aborted);
+    _servers.erase(it);
+}
+
 future<> raft_group_registry::stop_servers() noexcept {
     gate g;
     for (auto it = _servers.begin(); it != _servers.end(); it = _servers.erase(it)) {

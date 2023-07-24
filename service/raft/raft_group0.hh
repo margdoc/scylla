@@ -159,6 +159,8 @@ public:
     // which will start a procedure to create group 0 and switch administrative operations to use it.
     future<> finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service);
 
+    future<> stop_group0();
+
     // If Raft is disabled or in RECOVERY mode, returns `false`.
     // Otherwise:
     // - waits for the Raft upgrade procedure to finish if it's currently in progress,
