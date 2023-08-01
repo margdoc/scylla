@@ -1518,6 +1518,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(feature_service), std::ref(db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
                 cdc_generation_service.stop().get();
+                utils::get_local_injector().inject_with_handler("stop_cdc_generation_service::wait", [] (auto& handler) -> future<> {
+                    startlog.info("stop_cdc_generation_service wait");
+                    return handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+                }).get();
             });
 
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };

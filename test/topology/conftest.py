@@ -12,6 +12,7 @@ from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
 from test.pylib.async_cql import event_loop, run_async
+from test.pylib.log_browsing import thread_pool
 import logging
 import pytest
 from cassandra.cluster import Session                                    # type: ignore # pylint: disable=no-name-in-module

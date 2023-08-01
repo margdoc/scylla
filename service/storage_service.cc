@@ -11,6 +11,7 @@
 
 #include "storage_service.hh"
 #include "dht/boot_strapper.hh"
+#include <chrono>
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -473,6 +474,10 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
+        co_await utils::get_local_injector().inject_with_handler("handle_cdc_generation::wait", [] (auto& handler) -> future<> {
+            slogger.info("topology_state_load: before handle_cdc_generation");
+            return handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
+        });
         co_await cdc_gen_svc.handle_cdc_generation(*gen_id);
     }
 }
