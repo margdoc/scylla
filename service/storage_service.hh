@@ -800,6 +800,9 @@ private:
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
+
+public:
+    future<> start_maintenance_mode();
 };
 
 }

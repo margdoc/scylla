@@ -14,6 +14,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
+#include "dht/token.hh"
 #include "gms/endpoint_state.hh"
 #include "locator/snitch_base.hh"
 #include "locator/production_snitch_base.hh"
@@ -6573,6 +6574,12 @@ future<> storage_service::node_ops_abort_thread() {
         }
     }
     __builtin_unreachable();
+}
+
+future<> storage_service::start_maintenance_mode() {
+    return mutate_token_metadata([] (mutable_token_metadata_ptr token_metadata) {
+        return token_metadata->update_normal_tokens({ dht::token{} }, utils::fb_utilities::get_broadcast_address());
+    });
 }
 
 } // namespace service
