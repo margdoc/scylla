@@ -20,6 +20,7 @@ target_sources(scylla_auth
     sasl_challenge.cc
     service.cc
     standard_role_manager.cc
+    maintenance_mode_role_manager.cc
     transitional.cc)
 target_include_directories(scylla_auth
   PUBLIC

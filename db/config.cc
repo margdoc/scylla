@@ -787,7 +787,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , role_manager(this, "role_manager", value_status::Used, "org.apache.cassandra.auth.CassandraRoleManager",
         "The role-management backend, used to maintain grantts and memberships between roles.\n"
         "The available role-managers are:\n"
-        "\tCassandraRoleManager : Stores role data in the system_auth keyspace.")
+        "\tCassandraRoleManager : Stores role data in the system_auth keyspace.\n"
+        "\tMaintenanceModeRoleManager : Allows all access to all users. This role-manager is used in the maintenance mode.")
     , permissions_validity_in_ms(this, "permissions_validity_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms "
         "and the cached value has been read at least once during the permissions_validity_in_ms time frame. If any of these two conditions doesn't hold the cached value is going to be evicted from the cache.\n"
