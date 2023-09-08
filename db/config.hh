@@ -268,6 +268,8 @@ public:
     named_value<uint32_t> streaming_socket_timeout_in_ms;
     named_value<bool> start_native_transport;
     named_value<uint16_t> native_transport_port;
+    named_value<uint16_t> maintenance_port;
+    named_value<sstring> maintenance_listen_address;
     named_value<uint16_t> native_transport_port_ssl;
     named_value<uint16_t> native_shard_aware_transport_port;
     named_value<uint16_t> native_shard_aware_transport_port_ssl;
@@ -460,6 +462,9 @@ public:
     utils::updateable_value<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
+
+    named_value<bool> enable_maintenance_port;
+    named_value<bool> maintenance_mode;
 
     static const sstring default_tls_priority;
 private:

@@ -670,6 +670,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
+    , maintenance_port(this, "maintenance_port", "maintenance_port", value_status::Used, 29042,
+        "Port on which the maintenance CQL transport listens for clients.")
+    , maintenance_listen_address(this, "maintenance_listen_address", value_status::Used, "localhost",
+        "The IP address or hostname a node uses for maintenance CQL transport.")
     , native_transport_port_ssl(this, "native_transport_port_ssl", value_status::Used, 9142,
         "Port on which the CQL TLS native transport listens for clients."
         "Enabling client encryption and keeping native_transport_port_ssl disabled will use encryption"
@@ -1023,6 +1027,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , auth_certificate_role_queries(this, "auth_certificate_role_queries", value_status::Used, { { { "source", "SUBJECT" }, {"query", "CN=([^,]+)" } } },
         "Regular expression used by CertificateAuthenticator to extract role name from an accepted transport authentication certificate subject info.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
+    , enable_maintenance_port(this, "enable_maintenance_port", value_status::Used, false, "If set to true, Scylla will listen on a maintenance port on localhost. WARNING: This port is not secured and should not be exposed to the internet.")
+    , maintenance_mode(this, "maintenance_mode", value_status::Used, false, "If set to true, Scylla will not connect to other nodes and will not change schema. It will only serve requests to its local data.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
