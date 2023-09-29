@@ -273,6 +273,7 @@ public:
         bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
         std::unordered_map<gms::inet_address, gms::inet_address> preferred_ips;
+        bool maintenance_mode = false;
     };
 
     struct scheduling_config {
