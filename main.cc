@@ -1258,7 +1258,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // group0 client exists only on shard 0.
             // The client has to be created before `stop_raft` since during
             // destruction it has to exist until raft_gr.stop() completes.
-            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
+            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local(), cfg->maintenance_mode() ? maintenance_mode_enabled::yes : maintenance_mode_enabled::no};
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,

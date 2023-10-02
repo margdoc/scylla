@@ -25,6 +25,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "db/system_keyspace.hh"
 #include "utils/fb_utilities.hh"
+#include "maintenance_mode.hh"
 
 namespace service {
 // Obtaining this object means that all previously finished operations on group 0 are visible on this node.
@@ -84,6 +85,8 @@ class raft_group0_client {
 
     std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
 
+    maintenance_mode_enabled _maintenance_mode;
+
     // Guard manages the result of a single query. If it is created for a particular query,
     // then `group0_state_machine` will save the result of that query and it can be returned by the guard.
     // Guard manages the lifetime of the _results entry. It creates and destroys the entry, which state machine puts the result in.
@@ -100,7 +103,7 @@ class raft_group0_client {
     };
 
 public:
-    raft_group0_client(service::raft_group_registry&, db::system_keyspace&);
+    raft_group0_client(service::raft_group_registry&, db::system_keyspace&, maintenance_mode_enabled);
 
     // Call after `system_keyspace` is initialized.
     future<> init();
