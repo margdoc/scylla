@@ -12,6 +12,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
+#include "maintenance_mode.hh"
 #include "protocol_server.hh"
 
 using namespace seastar;
@@ -55,13 +56,13 @@ class controller : public protocol_server {
     future<> subscribe_server(sharded<cql_server>& server);
     future<> unsubscribe_server(sharded<cql_server>& server);
 
-    bool _enable_maintenance_port;
+    maintenance_port_enabled _enable_maintenance_port;
 
 public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, sharded<gms::gossiper>&,
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
-            const db::config& cfg, scheduling_group_key cql_opcode_stats_key, bool enable_maintenance_port);
+            const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_port_enabled enable_maintenance_port);
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;
