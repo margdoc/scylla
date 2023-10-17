@@ -121,7 +121,7 @@ struct cql_sg_stats {
         uint64_t response_size = 0;
     };
 
-    cql_sg_stats();
+    cql_sg_stats(bool);
     request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
     void register_metrics();
 private:
@@ -160,6 +160,7 @@ private:
     qos::service_level_controller& _sl_controller;
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
+    bool _enable_maintenance_port;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -167,7 +168,8 @@ public:
             const db::config& db_cfg,
             qos::service_level_controller& sl_controller,
             gms::gossiper& g,
-            scheduling_group_key stats_key);
+            scheduling_group_key stats_key,
+            bool enable_maintenance_port);
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;

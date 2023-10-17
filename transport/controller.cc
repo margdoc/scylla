@@ -24,7 +24,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        const db::config& cfg, scheduling_group_key cql_opcode_stats_key)
+        const db::config& cfg, scheduling_group_key cql_opcode_stats_key, bool enable_maintenance_port)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
@@ -35,6 +35,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _sl_controller(sl_controller)
     , _config(cfg)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
+    , _enable_maintenance_port(enable_maintenance_port)
 {
 }
 
@@ -100,7 +101,6 @@ future<> controller::do_start_server() {
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
             };
         });
-        const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
 
         struct listen_cfg {
             socket_address addr;
@@ -112,47 +112,57 @@ future<> controller::do_start_server() {
         std::vector<listen_cfg> configs;
         int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
-        if (cfg.native_transport_port.is_set() ||
-                (!cfg.native_transport_port_ssl.is_set() && !cfg.native_transport_port.is_set())) {
-            // Non-SSL port is specified || neither SSL nor non-SSL ports are specified
-            configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+        if (!_enable_maintenance_port) {
+            const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
+
+            if (cfg.native_transport_port.is_set() ||
+                    (!cfg.native_transport_port_ssl.is_set() && !cfg.native_transport_port.is_set())) {
+                // Non-SSL port is specified || neither SSL nor non-SSL ports are specified
+                configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+                _listen_addresses.push_back(configs.back().addr);
+                native_port_idx = 0;
+            }
+            if (cfg.native_shard_aware_transport_port.is_set() ||
+                    (!cfg.native_shard_aware_transport_port_ssl.is_set() && !cfg.native_shard_aware_transport_port.is_set())) {
+                configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
+                _listen_addresses.push_back(configs.back().addr);
+                native_shard_aware_port_idx = native_port_idx + 1;
+            }
+
+            // main should have made sure values are clean and neatish
+            if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
+                auto cred = std::make_shared<seastar::tls::credentials_builder>();
+                utils::configure_tls_creds_builder(*cred, std::move(ceo)).get();
+
+                logger.info("Enabling encrypted CQL connections between client and server");
+
+                if (cfg.native_transport_port_ssl.is_set() &&
+                        (!cfg.native_transport_port.is_set() ||
+                        cfg.native_transport_port_ssl() != cfg.native_transport_port())) {
+                    // SSL port is specified && non-SSL port is either left out or set to a different value
+                    configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
+                    _listen_addresses.push_back(configs.back().addr);
+                } else if (native_port_idx >= 0) {
+                    configs[native_port_idx].cred = cred;
+                }
+                if (cfg.native_shard_aware_transport_port_ssl.is_set() &&
+                        (!cfg.native_shard_aware_transport_port.is_set() ||
+                        cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port())) {
+                    configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
+                    _listen_addresses.push_back(configs.back().addr);
+                } else if (native_shard_aware_port_idx >= 0) {
+                    configs[native_shard_aware_port_idx].cred = std::move(cred);
+                }
+            }
+        } else {
+            const seastar::net::inet_address ip = utils::resolve(cfg.maintenance_listen_address, family, preferred).get0();
+
+            configs.emplace_back(listen_cfg{{ip, cfg.maintenance_port()}, false });
             _listen_addresses.push_back(configs.back().addr);
             native_port_idx = 0;
         }
-        if (cfg.native_shard_aware_transport_port.is_set() ||
-                (!cfg.native_shard_aware_transport_port_ssl.is_set() && !cfg.native_shard_aware_transport_port.is_set())) {
-            configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
-            _listen_addresses.push_back(configs.back().addr);
-            native_shard_aware_port_idx = native_port_idx + 1;
-        }
 
-        // main should have made sure values are clean and neatish
-        if (utils::is_true(utils::get_or_default(ceo, "enabled", "false"))) {
-            auto cred = std::make_shared<seastar::tls::credentials_builder>();
-            utils::configure_tls_creds_builder(*cred, std::move(ceo)).get();
-
-            logger.info("Enabling encrypted CQL connections between client and server");
-
-            if (cfg.native_transport_port_ssl.is_set() &&
-                    (!cfg.native_transport_port.is_set() ||
-                    cfg.native_transport_port_ssl() != cfg.native_transport_port())) {
-                // SSL port is specified && non-SSL port is either left out or set to a different value
-                configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
-                _listen_addresses.push_back(configs.back().addr);
-            } else if (native_port_idx >= 0) {
-                configs[native_port_idx].cred = cred;
-            }
-            if (cfg.native_shard_aware_transport_port_ssl.is_set() &&
-                    (!cfg.native_shard_aware_transport_port.is_set() ||
-                    cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port())) {
-                configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
-                _listen_addresses.push_back(configs.back().addr);
-            } else if (native_shard_aware_port_idx >= 0) {
-                configs[native_shard_aware_port_idx].cred = std::move(cred);
-            }
-        }
-
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _enable_maintenance_port).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
