@@ -1615,6 +1615,77 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gossiper.local().unregister_(mm.local().shared_from_this()).get();
             });
 
+            utils::loading_cache_config perm_cache_config;
+            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
+            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
+            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
+            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
+
+            auth::service_config auth_config;
+            auth_config.authorizer_java_name = qualified_authorizer_name;
+            auth_config.authenticator_java_name = qualified_authenticator_name;
+            auth_config.role_manager_java_name = qualified_role_manager_name;
+
+            auth::service_config maintenance_auth_config;
+            maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
+            maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
+            maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_mode_role_manager_name};
+
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
+            maintenance_auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
+
+            auto start_auth_service = [&mm] (sharded<auth::service>& auth_service, std::any& stop_auth_service) {
+                supervisor::notify("starting auth service");
+                auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
+
+                stop_auth_service = defer_verbose_shutdown("auth service", [&auth_service] {
+                    auth_service.stop().get();
+                });
+            };
+
+            api::set_server_authorization_cache(ctx, auth_service).get();
+            auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
+                api::unset_server_authorization_cache(ctx).get();
+            });
+
+            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(false);
+            scheduling_group_key_config maintenance_cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(true);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), false);
+            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), true);
+
+            auto start_cql = [&dbcfg] (cql_transport::controller& controller, std::any& stop_cql) {
+                supervisor::notify("starting native transport");
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&controller] {
+                    return controller.start_server();
+                }).get();
+
+                // FIXME -- this should be done via client hooks instead
+                stop_cql = defer_verbose_shutdown("native transport", [&controller] {
+                    controller.stop_server().get();
+                });
+            };
+
+            if (cfg->maintenance_mode()) {
+                startlog.info("entering maintenance mode.");
+
+                if (!cfg->enable_maintenance_port()) {
+                    startlog.error("Bad configuration: maintenance mode requires enable_maintenance_port to be set");
+                    throw bad_configuration_error();
+                }
+
+                ss.local().start_maintenance_mode().get();
+
+                startlog.info("Scylla version {} initialization completed.", scylla_version());
+                stop_signal.wait().get();
+                startlog.info("Signal received; shutting down");
+                startlog.info("Scylla version {} shutdown complete.", scylla_version());
+                _exit(0);
+                return 0;
+            }
+
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
@@ -1683,44 +1754,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
-
-
-            supervisor::notify("starting auth service");
-            utils::loading_cache_config perm_cache_config;
-            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
-            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
-            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
-            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
-
-            auth::service_config auth_config;
-            auth_config.authorizer_java_name = qualified_authorizer_name;
-            auth_config.authenticator_java_name = qualified_authenticator_name;
-            auth_config.role_manager_java_name = qualified_role_manager_name;
-
-            auth::service_config maintenance_auth_config;
-            maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
-            maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
-            maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_mode_role_manager_name};
-
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
-            maintenance_auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
-
-            auto start_auth_service = [&mm] (sharded<auth::service>& auth_service, std::any& stop_auth_service) {
-                supervisor::notify("starting auth service");
-                auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
-
-                stop_auth_service = defer_verbose_shutdown("auth service", [&auth_service] {
-                    auth_service.stop().get();
-                });
-            };
-
-            api::set_server_authorization_cache(ctx, auth_service).get();
-            auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
-                api::unset_server_authorization_cache(ctx).get();
-            });
 
             snapshot_ctl.start(std::ref(db)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
@@ -1801,22 +1834,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            scheduling_group_key_config cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_port_enabled::no);
-            scheduling_group_key_config maintenance_cql_sg_stats_cfg = make_scheduling_group_key_config<cql_transport::cql_sg_stats>(maintenance_port_enabled::yes);
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(cql_sg_stats_cfg).get0(), maintenance_port_enabled::no);
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, scheduling_group_key_create(maintenance_cql_sg_stats_cfg).get0(), maintenance_port_enabled::yes);
-
-            auto start_cql = [&dbcfg] (cql_transport::controller& controller, std::any& stop_cql) {
-                supervisor::notify("starting native transport");
-                with_scheduling_group(dbcfg.statement_scheduling_group, [&controller] {
-                    return controller.start_server();
-                }).get();
-
-                // FIXME -- this should be done via client hooks instead
-                stop_cql = defer_verbose_shutdown("native transport", [&controller] {
-                    controller.stop_server().get();
-                });
-            };
             ss.local().register_protocol_server(cql_server_ctl);
 
             std::any stop_auth_service;
