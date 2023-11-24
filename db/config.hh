@@ -273,6 +273,7 @@ public:
     named_value<uint32_t> streaming_socket_timeout_in_ms;
     named_value<bool> start_native_transport;
     named_value<uint16_t> native_transport_port;
+    named_value<sstring> maintenance_socket;
     named_value<uint16_t> native_transport_port_ssl;
     named_value<uint16_t> native_shard_aware_transport_port;
     named_value<uint16_t> native_shard_aware_transport_port_ssl;
