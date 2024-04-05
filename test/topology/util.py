@@ -259,16 +259,16 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         # Check that the contents fetched from the current host are the same as for other nodes
         assert topo_results[0] == topo_res
 
-async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
+async def start_writes_to_cdc_table(manager: ManagerClient, concurrency: int = 3):
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
-    await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
+    await manager.cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
+    await manager.cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
 
-    stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
+    stmt = manager.cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
     stmt.consistency_level = ConsistencyLevel.ONE
 
     async def do_writes():
@@ -276,7 +276,8 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
         while not stop_event.is_set():
             start_time = time.time()
             try:
-                await cql.run_async(stmt, [iteration])
+                if manager.cql is not None:
+                    await manager.cql.run_async(stmt, [iteration])
             except NoHostAvailable as e:
                 for _, err in e.errors.items():
                     # ConnectionException can be raised when the node is shutting down.
@@ -292,11 +293,11 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
 
     async def verify():
-        generations = await cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
+        generations = await manager.cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
 
         stream_to_timestamp = { stream: gen.time for gen in generations for stream in gen.streams}
 
-        cdc_log = await cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log")
+        cdc_log = await manager.cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log")
         for log_entry in cdc_log:
             assert log_entry.cdc_stream_id in stream_to_timestamp
             timestamp = stream_to_timestamp[log_entry.cdc_stream_id]

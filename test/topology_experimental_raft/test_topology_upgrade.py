@@ -45,7 +45,7 @@ async def test_topology_upgrade_basic(request, mode: str, manager: ManagerClient
         status = await manager.api.raft_topology_upgrade_status(host.address)
         assert status == "not_upgraded"
 
-    finish_writes_and_verify = await start_writes_to_cdc_table(cql)
+    finish_writes_and_verify = await start_writes_to_cdc_table(manager)
 
     logging.info("Triggering upgrade to raft topology")
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
