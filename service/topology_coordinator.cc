@@ -32,6 +32,7 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "seastar/core/sleep.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_address_map.hh"
@@ -1428,6 +1429,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_return false;
         }
 
+        if (*tstate == topology::transition_state::write_both_read_old) {
+            co_await utils::get_local_injector().inject("write_both_read_old_wait_to_apply", std::chrono::seconds(5));
+        }
         rtlogger.info("entered `{}` transition state", *tstate);
         switch (*tstate) {
             case topology::transition_state::join_group0: {
@@ -2759,6 +2763,15 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier) {
+    rtlogger.warn("starting topology coordinator");
+    co_await utils::get_local_injector().inject("topology_coordinator_wait_for_start", [] (auto& _) -> future<> {
+        rtlogger.warn("waiting for 10 seconds before starting topology coordinator");
+
+        // rtlogger.warn();
+
+        co_await sleep(std::chrono::seconds(10));
+        rtlogger.warn("starting topology coordinator");
+    });
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
